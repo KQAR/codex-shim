@@ -76,7 +76,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "restart":
         stop()
         generate(args.settings, args.port)
-        return start(args.settings, args.port)
+        rc = start(args.settings, args.port)
+        if rc == 0 and _codex_gui_running():
+            print()
+            print("Note: Codex Desktop is still running with the OLD catalog cached.")
+            print("      Run `codex-shim app .` (or restart Codex manually) for catalog")
+            print("      changes to take effect — `restart` only restarts the shim daemon.")
+        return rc
     if args.command == "status":
         return status(args.port)
     if args.command == "patch-app":
@@ -128,7 +134,18 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
     cleaned = _remove_top_level_keys(cleaned, {"model", "model_provider", "model_catalog_json"})
     cleaned = _remove_section(cleaned, "model_providers.factory_byok_shim")
     top_block, provider_block = _managed_config_blocks(default_slug, port)
-    CODEX_CONFIG_PATH.write_text(top_block + "\n" + cleaned.lstrip() + "\n" + provider_block)
+    new_text = top_block + "\n" + cleaned.lstrip() + "\n" + provider_block
+    # Defensive sanity check: a well-formed managed install has exactly two
+    # MANAGED_BEGIN markers (top block + provider block). If we somehow
+    # produced more, bail out before clobbering the user's config so they
+    # can inspect the backup.
+    begin_count = new_text.count(MANAGED_BEGIN)
+    if begin_count != 2:
+        raise SystemExit(
+            f"Refusing to write {CODEX_CONFIG_PATH}: produced {begin_count} managed "
+            f"block markers (expected 2). Original backup: {CODEX_CONFIG_BACKUP_PATH}"
+        )
+    CODEX_CONFIG_PATH.write_text(new_text)
     print(f"Installed shim config into {CODEX_CONFIG_PATH}.")
     print(f"Original backup: {CODEX_CONFIG_BACKUP_PATH}")
 
@@ -243,23 +260,51 @@ def exec_codex_app(settings_path: Path, port: int, path: str) -> None:
 
 
 def _quit_codex_app() -> None:
-    """Stop both the Codex GUI and any lingering `codex app-server` daemons.
+    """Stop the Codex GUI, then sweep up any orphaned `codex app-server` daemons.
 
     Codex Desktop is a GUI process plus a long-lived `codex app-server` that
     actually loads ~/.codex/config.toml. Quitting only the GUI leaves the
     old app-server attached, so a freshly launched GUI reuses it and ignores
-    config changes (model_catalog_json, model_provider, etc.). We pkill the
-    app-server too so the next launch reads the current config.
+    config changes (model_catalog_json, model_provider, etc.).
+
+    Earlier versions pkill'd app-server eagerly, but that races: if Codex
+    is open and a request is in flight when we run, killing app-server
+    severs its websocket and the GUI shows
+        Codex app-server websocket closed (code=unknown)
+    Instead, ask the GUI to quit, wait until it really dies, *then* clean
+    up only the still-alive app-server processes (which are now orphaned —
+    no GUI is going to mind).
     """
     script = 'tell application "Codex" to if it is running then quit'
     try:
         subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
         pass
-    # `pkill -f` matches against the full command line; `codex app-server`
-    # is unique enough not to collide with anything else on a normal macOS.
+
+    # Wait up to 5s for the GUI to actually exit. We only sweep app-server
+    # after the GUI is gone — otherwise we'd kill its peer mid-conversation.
+    for _ in range(50):
+        if not _codex_gui_running():
+            break
+        time.sleep(0.1)
+
+    # Now any remaining `codex app-server` is orphaned (no GUI). Reap so the
+    # next launch reads the current ~/.codex/config.toml from scratch.
     subprocess.run(["pkill", "-f", "codex app-server"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1.0)
+    time.sleep(0.5)
+
+
+def _codex_gui_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/pgrep", "-xf", "/Applications/Codex.app/Contents/MacOS/Codex"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return bool(result.stdout.strip())
 
 
 CODEX_APP = Path("/Applications/Codex.app")
