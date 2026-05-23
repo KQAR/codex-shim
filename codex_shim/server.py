@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -712,7 +713,10 @@ def _decode_thinking_payload(encoded: str) -> dict[str, Any] | None:
 
 def _join_url(base_url: str, endpoint: str) -> str:
     base = base_url.rstrip("/")
-    if base.endswith("/v1"):
+    base_path = urlparse(base).path.rstrip("/")
+    if re.search(r"/v\d+$", base_path):
+        # Caller supplied a versioned API prefix (/v1, /v3, /api/coding/v3 …).
+        # Trust it and just append the endpoint — don't re-inject /v1.
         return base + endpoint
     if endpoint == "/messages":
         return base + "/v1/messages"

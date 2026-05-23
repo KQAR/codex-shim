@@ -50,11 +50,14 @@ def catalog_entry(model: FactoryModel) -> dict:
         "priority": max(1, 1000 - model.index),
         "prefer_websockets": False,
         "available_in_plans": PLAN_TIERS,
-        "base_instructions": "You are a coding agent running in Codex through a local BYOK shim.",
+        "base_instructions": (
+            f"You are Codex, a coding agent running on {model.display_name} "
+            f"through a local Factory BYOK shim. Be a helpful, direct coding collaborator."
+        ),
         "model_messages": {
             "instructions_template": (
-                "You are Codex running on {model_name} through a local Factory BYOK shim. "
-                "Be a helpful, direct coding collaborator."
+                f"You are Codex, a coding agent running on {model.display_name} "
+                f"through a local Factory BYOK shim. Be a helpful, direct coding collaborator."
             ),
             "instructions_variables": {"model_name": model.display_name},
         },

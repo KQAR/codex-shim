@@ -32,10 +32,14 @@ def responses_to_chat(body: dict[str, Any], upstream_model: str) -> dict[str, An
     if instructions:
         messages.append({"role": "system", "content": _content_to_text(instructions)})
     # Chat-completions upstreams don't understand reasoning items; drop the
-    # marker messages we emit for the Anthropic path.
+    # marker messages we emit for the Anthropic path. Some upstreams (e.g.
+    # Volc Engine ark) also reject the Responses-API `developer` role —
+    # downgrade it to `system`, which every OpenAI-compatible API accepts.
     for m in _responses_input_to_messages(body.get("input")):
         if m.get("_reasoning_only"):
             continue
+        if m.get("role") == "developer":
+            m = {**m, "role": "system"}
         messages.append(m)
 
     chat: dict[str, Any] = {
