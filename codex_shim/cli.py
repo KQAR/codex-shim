@@ -236,18 +236,30 @@ def exec_codex(settings_path: Path, port: int, codex_args: list[str]) -> None:
 
 def exec_codex_app(settings_path: Path, port: int, path: str) -> None:
     _quit_codex_app()
-    args = ["codex", "app", path]
+    overrides = _override_args(settings_path, port)
+    args = ["codex", "app", *overrides, path]
     subprocess.Popen(args)
     _foreground_codex_app()
 
 
 def _quit_codex_app() -> None:
+    """Stop both the Codex GUI and any lingering `codex app-server` daemons.
+
+    Codex Desktop is a GUI process plus a long-lived `codex app-server` that
+    actually loads ~/.codex/config.toml. Quitting only the GUI leaves the
+    old app-server attached, so a freshly launched GUI reuses it and ignores
+    config changes (model_catalog_json, model_provider, etc.). We pkill the
+    app-server too so the next launch reads the current config.
+    """
     script = 'tell application "Codex" to if it is running then quit'
     try:
         subprocess.run(["osascript", "-e", script], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1.0)
     except OSError:
         pass
+    # `pkill -f` matches against the full command line; `codex app-server`
+    # is unique enough not to collide with anything else on a normal macOS.
+    subprocess.run(["pkill", "-f", "codex app-server"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
 
 
 CODEX_APP = Path("/Applications/Codex.app")

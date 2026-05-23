@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from codex_shim.server import ShimServer
+
+
+@pytest.fixture(autouse=True)
+def _strip_proxy_env(monkeypatch):
+    # ShimServer now uses ClientSession(trust_env=True) so users' system
+    # proxies are honored in production. Tests target a loopback fake
+    # upstream and must not be diverted through any HTTP_PROXY the user
+    # happens to have configured in their shell.
+    for var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
 
 
 async def test_responses_routes_to_openai_chat(tmp_path):
