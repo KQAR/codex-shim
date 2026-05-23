@@ -41,6 +41,10 @@ class FactoryModel:
     def is_openai_chat(self) -> bool:
         return self.provider in {"openai", "generic-chat-completion-api"}
 
+    @property
+    def is_bedrock(self) -> bool:
+        return self.provider == "bedrock"
+
 
 class FactorySettings:
     def __init__(self, path: Path = DEFAULT_FACTORY_SETTINGS):

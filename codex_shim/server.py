@@ -10,8 +10,10 @@ from urllib.parse import urljoin, urlparse
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from .bedrock_stream import BedrockStreamError, iter_anthropic_events
 from .settings import DEFAULT_FACTORY_SETTINGS, DEFAULT_HOST, DEFAULT_PORT, FactoryModel, FactorySettings
 from .translate import (
+    anthropic_body_to_bedrock,
     anthropic_to_chat_response,
     anthropic_to_response,
     chat_completion_to_response,
@@ -53,6 +55,9 @@ class ShimServer:
         if route.is_anthropic:
             forwarded = chat_to_anthropic(body, route.model, route.max_output_tokens)
             return await self._post_anthropic(request, route, forwarded, as_responses=False)
+        if route.is_bedrock:
+            forwarded = chat_to_anthropic(body, route.model, route.max_output_tokens)
+            return await self._post_bedrock(request, route, forwarded, as_responses=False)
         raise web.HTTPBadGateway(text=f"Unsupported Factory provider: {route.provider}")
 
     async def responses(self, request: web.Request) -> web.StreamResponse:
@@ -68,6 +73,9 @@ class ShimServer:
         if route.is_anthropic:
             forwarded = responses_to_anthropic(body, route.model, route.max_output_tokens)
             return await self._post_anthropic(request, route, forwarded, as_responses=True)
+        if route.is_bedrock:
+            forwarded = responses_to_anthropic(body, route.model, route.max_output_tokens)
+            return await self._post_bedrock(request, route, forwarded, as_responses=True)
         raise web.HTTPBadGateway(text=f"Unsupported Factory provider: {route.provider}")
 
     async def _chatgpt_passthrough(
@@ -160,6 +168,73 @@ class ShimServer:
         if as_responses:
             return web.json_response(anthropic_to_response(payload, route.slug))
         return web.json_response(anthropic_to_chat_response(payload, route.slug))
+
+    async def _post_bedrock(
+        self, request: web.Request, route: FactoryModel, body: dict[str, Any], as_responses: bool
+    ) -> web.StreamResponse:
+        if not route.api_key:
+            raise web.HTTPUnauthorized(text=f"Bedrock model {route.slug!r} has no apiKey set in settings.json")
+        if not route.base_url:
+            raise web.HTTPBadGateway(text=f"Bedrock model {route.slug!r} has no baseUrl set in settings.json")
+
+        bedrock_body = anthropic_body_to_bedrock(body)
+        streaming = bool(body.get("stream"))
+        endpoint = "invoke-with-response-stream" if streaming else "invoke"
+        url = f"{route.base_url.rstrip('/')}/model/{route.model}/{endpoint}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.amazon.eventstream" if streaming else "application/json",
+            "Authorization": f"Bearer {route.api_key}",
+            **route.extra_headers,
+        }
+
+        async with ClientSession(timeout=self.timeout) as session:
+            upstream = await session.post(url, json=bedrock_body, headers=headers)
+            if upstream.status >= 400:
+                return await _error_response(upstream)
+            if streaming:
+                return await self._stream_bedrock(request, upstream, route, as_responses)
+            payload = await upstream.json(content_type=None)
+        if as_responses:
+            return web.json_response(anthropic_to_response(payload, route.slug))
+        return web.json_response(anthropic_to_chat_response(payload, route.slug))
+
+    async def _stream_bedrock(
+        self, request: web.Request, upstream, route: FactoryModel, as_responses: bool
+    ) -> web.StreamResponse:
+        """Decode Bedrock event-stream frames into the Anthropic SSE pipeline.
+
+        Each Bedrock chunk wraps an Anthropic event byte-for-byte, so once we
+        peel off the AWS framing we feed events straight into the existing
+        ResponsesStreamState (Codex Responses path) or to the Chat-Completions
+        translator — same code path as the Anthropic public API.
+        """
+        response = _sse_response()
+        await response.prepare(request)
+        state = ResponsesStreamState(route.slug) if as_responses else None
+        try:
+            if state is not None:
+                await state.start(response)
+            async for event in iter_anthropic_events(upstream.content):
+                if as_responses:
+                    await state.write_anthropic_delta(response, event)
+                else:
+                    await _write_sse(response, _anthropic_stream_to_chat_chunk(event, route.slug))
+            if state is not None:
+                await state.finish(response)
+            else:
+                await _safe_write(response, b"data: [DONE]\n\n")
+        except BedrockStreamError as e:
+            await _safe_write(response, f"event: error\ndata: {e}\n\n".encode())
+        except ClientDisconnected:
+            pass
+        finally:
+            upstream.release()
+        try:
+            await response.write_eof()
+        except Exception:
+            pass
+        return response
 
     async def _stream_openai_chat(
         self, request: web.Request, upstream, route: FactoryModel, as_responses: bool

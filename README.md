@@ -127,6 +127,28 @@ Supported `provider` values:
 | `openai` | OpenAI/`/v1/chat/completions` |
 | `generic-chat-completion-api` | OpenAI-shaped chat completions |
 | `anthropic` | Anthropic `/v1/messages` |
+| `bedrock` | AWS Bedrock `/model/<id>/invoke[-with-response-stream]` (Anthropic-family models only) |
+
+### AWS Bedrock (Claude on Bedrock)
+
+Bedrock entries route to `bedrock-runtime.<region>.amazonaws.com` and only
+support Anthropic-family models (Claude). Authentication uses a Bedrock API
+key (long-term Bearer token, GA late 2024) — no SigV4 signing, no IAM
+credentials. Cross-region inference profile IDs (`us.anthropic.…`) are the
+recommended way to pin region routing.
+
+```json
+{
+  "model": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+  "provider": "bedrock",
+  "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+  "apiKey": "<AWS_BEARER_TOKEN_BEDROCK>",
+  "displayName": "Claude Sonnet 4 (Bedrock)"
+}
+```
+
+Both `apiKey` and `baseUrl` are required — the shim does not read AWS env
+vars. Region is derived from the host portion of `baseUrl`.
 
 ---
 

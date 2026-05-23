@@ -162,6 +162,18 @@ def responses_to_anthropic(body: dict[str, Any], upstream_model: str, max_tokens
     return anthropic
 
 
+def anthropic_body_to_bedrock(body: dict[str, Any]) -> dict[str, Any]:
+    """Convert an Anthropic Messages body to Bedrock invoke body.
+
+    Bedrock's Anthropic-family endpoint expects the same Messages payload
+    *minus* the `model` field (model is in the URL) and *plus* the
+    bedrock-specific anthropic_version. Stream flag is also URL-controlled.
+    """
+    converted = {k: v for k, v in body.items() if k not in {"model", "stream"}}
+    converted["anthropic_version"] = "bedrock-2023-05-31"
+    return converted
+
+
 def chat_to_responses_request(body: dict[str, Any], upstream_model: str, max_tokens: int | None = None) -> dict[str, Any]:
     converted = {
         "model": upstream_model,
