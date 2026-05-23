@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
-from pathlib import Path
+import shutil
 import signal
+import struct
 import subprocess
 import sys
 import time
-import hashlib
+from pathlib import Path
 from urllib.request import urlopen
 
 from .catalog import codex_config_overrides, write_catalog, write_config
@@ -248,82 +250,178 @@ def _quit_codex_app() -> None:
         pass
 
 
+CODEX_APP = Path("/Applications/Codex.app")
+CODEX_APP_ASAR = CODEX_APP / "Contents" / "Resources" / "app.asar"
+CODEX_APP_INFO_PLIST = CODEX_APP / "Contents" / "Info.plist"
+ASAR_BACKUP = RUNTIME_DIR / "app.asar.before-codex-shim-model-picker-patch"
+INFO_PLIST_BACKUP = RUNTIME_DIR / "Info.plist.before-codex-shim-model-picker-patch"
+BUNDLE_BACKUP_LINK = RUNTIME_DIR / "Codex.app.bundle-backup"
+
+
 def patch_codex_app() -> int:
-    app_asar = Path("/Applications/Codex.app/Contents/Resources/app.asar")
-    backup = RUNTIME_DIR / "app.asar.before-codex-shim-model-picker-patch"
-    workdir = RUNTIME_DIR / "app-asar-work"
+    """Patch Codex Desktop's model-picker allowlist.
+
+    macOS App Management (Ventura+) blocks any in-place modification of files
+    inside notarized app bundles under /Applications, even with sudo, unless
+    the calling terminal has been granted that TCC entitlement. To stay out of
+    that swamp, we replace the *whole* bundle: copy Codex.app into the user's
+    workdir, patch + repack + re-sign there, then atomically swap it into
+    /Applications. App Management does not gate adding/removing entries in
+    /Applications itself; only modifying an existing bundle in-place.
+    """
     needle = "let u=c.useHiddenModels&&o!==`amazonBedrock`,d;"
     replacement = "let u=!1,d;"
 
-    if not app_asar.exists():
-        print(f"Codex app bundle not found at {app_asar}.", file=sys.stderr)
+    if not CODEX_APP_ASAR.exists():
+        print(f"Codex app bundle not found at {CODEX_APP}.", file=sys.stderr)
         return 1
     if not _has_command("npx"):
         print("npx is required to patch the Electron asar bundle.", file=sys.stderr)
         return 1
 
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    if not backup.exists():
-        backup.write_bytes(app_asar.read_bytes())
-        print(f"Backed up original app.asar to {backup}.")
-    versioned_backup = RUNTIME_DIR / f"app.asar.before-codex-shim-model-picker-patch.{_app_asar_hash(app_asar)[:12]}"
-    if not versioned_backup.exists():
-        versioned_backup.write_bytes(app_asar.read_bytes())
-        print(f"Backed up current app.asar to {versioned_backup}.")
+    if not ASAR_BACKUP.exists():
+        ASAR_BACKUP.write_bytes(CODEX_APP_ASAR.read_bytes())
+        print(f"Backed up original app.asar to {ASAR_BACKUP}.")
+    if not INFO_PLIST_BACKUP.exists():
+        INFO_PLIST_BACKUP.write_bytes(CODEX_APP_INFO_PLIST.read_bytes())
+        print(f"Backed up original Info.plist to {INFO_PLIST_BACKUP}.")
 
     _quit_codex_app()
-    if workdir.exists():
-        import shutil
 
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True)
+    work_bundle = RUNTIME_DIR / "Codex.app.work"
+    if work_bundle.exists():
+        shutil.rmtree(work_bundle)
+    print(f"Copying Codex.app to {work_bundle} (this takes a few seconds) …")
+    subprocess.run(["/bin/cp", "-R", str(CODEX_APP), str(work_bundle)], check=True)
 
-    subprocess.run(["npx", "--yes", "asar", "extract", str(app_asar), str(workdir)], check=True)
-    bundle_file = _find_model_queries_bundle(workdir, needle, replacement)
+    work_asar = work_bundle / "Contents" / "Resources" / "app.asar"
+    work_plist = work_bundle / "Contents" / "Info.plist"
+    extract_dir = RUNTIME_DIR / "app-asar-work"
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True)
+
+    subprocess.run(
+        ["npx", "--yes", "@electron/asar", "extract", str(work_asar), str(extract_dir)],
+        check=True,
+    )
+    bundle_file = _find_model_queries_bundle(extract_dir, needle, replacement)
     if bundle_file is None:
         print("Could not find the expected model picker filter in Codex Desktop.", file=sys.stderr)
         return 1
     text = bundle_file.read_text()
-    changed = False
-    if replacement in text:
-        print("Codex Desktop model picker patch is already applied.")
+    if replacement in text and needle not in text:
+        print("Codex Desktop model picker patch is already applied (in source bundle).")
     elif needle in text:
         bundle_file.write_text(text.replace(needle, replacement))
-        subprocess.run(["npx", "--yes", "asar", "pack", str(workdir), str(app_asar)], check=True)
-        changed = True
         print("Patched Codex Desktop model picker allowlist filter.")
     else:
         print("Could not find the expected model picker filter in Codex Desktop.", file=sys.stderr)
         return 1
-    if changed:
-        _resign_codex_app()
+
+    new_asar = RUNTIME_DIR / "app.asar.new"
+    if new_asar.exists():
+        new_asar.unlink()
+    subprocess.run(
+        ["npx", "--yes", "@electron/asar", "pack", str(extract_dir), str(new_asar)],
+        check=True,
+    )
+    if not new_asar.exists() or new_asar.stat().st_size == 0:
+        print(f"Repacked asar at {new_asar} is missing or empty.", file=sys.stderr)
+        return 1
+    if needle.encode() in new_asar.read_bytes():
+        print("Repacked asar still contains the unpatched needle; aborting.", file=sys.stderr)
+        return 1
+
+    # Replace the asar inside the work bundle (user-owned, no TCC barrier).
+    work_asar.write_bytes(new_asar.read_bytes())
+
+    new_hash = _asar_header_sha256(work_asar)
+    print(f"New asar header SHA-256: {new_hash}")
+    subprocess.run(
+        [
+            "/usr/libexec/PlistBuddy",
+            "-c",
+            f"Set :ElectronAsarIntegrity:Resources/app.asar:hash {new_hash}",
+            str(work_plist),
+        ],
+        check=True,
+    )
+
+    # Ad-hoc re-sign the work bundle. No sudo needed: we own this copy.
+    subprocess.run(
+        ["codesign", "--force", "--deep", "--sign", "-", str(work_bundle)],
+        check=True,
+    )
+    print("Re-signed work bundle.")
+
+    # Now swap into /Applications. We need sudo for /Applications itself.
+    if not _sudo_prime():
+        print("sudo authentication is required to install the patched bundle into /Applications.", file=sys.stderr)
+        return 1
+
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    bundle_backup = CODEX_APP.with_name(f"Codex.app.unpatched-{timestamp}")
+    print(f"Moving original /Applications/Codex.app to {bundle_backup} …")
+    subprocess.run(["sudo", "/bin/mv", str(CODEX_APP), str(bundle_backup)], check=True)
+    try:
+        subprocess.run(["sudo", "/bin/mv", str(work_bundle), str(CODEX_APP)], check=True)
+    except subprocess.CalledProcessError:
+        # Roll back so the user isn't left without Codex installed.
+        subprocess.run(["sudo", "/bin/mv", str(bundle_backup), str(CODEX_APP)], check=False)
+        raise
+
+    # Drop a pointer to the latest backup so `restore-app` can find it.
+    if BUNDLE_BACKUP_LINK.exists() or BUNDLE_BACKUP_LINK.is_symlink():
+        BUNDLE_BACKUP_LINK.unlink()
+    BUNDLE_BACKUP_LINK.symlink_to(bundle_backup)
+
+    print(f"Installed patched Codex.app. Original bundle preserved at {bundle_backup}.")
+    print("Launch with: codex-shim app .")
     return 0
 
 
 def restore_codex_app_bundle() -> int:
-    app_asar = Path("/Applications/Codex.app/Contents/Resources/app.asar")
-    backup = RUNTIME_DIR / "app.asar.before-codex-shim-model-picker-patch"
-    if not backup.exists():
-        print(f"No app.asar backup found at {backup}.")
+    """Roll back to the original /Applications/Codex.app bundle."""
+    if BUNDLE_BACKUP_LINK.exists() or BUNDLE_BACKUP_LINK.is_symlink():
+        try:
+            target = Path(os.readlink(BUNDLE_BACKUP_LINK))
+        except OSError:
+            target = BUNDLE_BACKUP_LINK
+        if target.exists():
+            if not _sudo_prime():
+                print("sudo authentication is required to restore /Applications/Codex.app.", file=sys.stderr)
+                return 1
+            _quit_codex_app()
+            subprocess.run(["sudo", "/bin/rm", "-rf", str(CODEX_APP)], check=True)
+            subprocess.run(["sudo", "/bin/mv", str(target), str(CODEX_APP)], check=True)
+            BUNDLE_BACKUP_LINK.unlink(missing_ok=True)
+            print(f"Restored {CODEX_APP} from {target}.")
+            return 0
+        print(f"Backup symlink {BUNDLE_BACKUP_LINK} → {target} is dangling.", file=sys.stderr)
+
+    # Fallback: search for the most recent Codex.app.unpatched-* sibling.
+    candidates = sorted(CODEX_APP.parent.glob("Codex.app.unpatched-*"))
+    if candidates:
+        target = candidates[-1]
+        if not _sudo_prime():
+            print("sudo authentication is required to restore /Applications/Codex.app.", file=sys.stderr)
+            return 1
+        _quit_codex_app()
+        subprocess.run(["sudo", "/bin/rm", "-rf", str(CODEX_APP)], check=True)
+        subprocess.run(["sudo", "/bin/mv", str(target), str(CODEX_APP)], check=True)
+        print(f"Restored {CODEX_APP} from {target}.")
         return 0
-    _quit_codex_app()
-    app_asar.write_bytes(backup.read_bytes())
-    print(f"Restored {app_asar} from {backup}.")
-    return 0
+
+    print("No Codex.app.unpatched-* backup found in /Applications.", file=sys.stderr)
+    return 1
 
 
 def _has_command(command: str) -> bool:
     from shutil import which
 
     return which(command) is not None
-
-
-def _app_asar_hash(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _find_model_queries_bundle(workdir: Path, needle: str, replacement: str) -> Path | None:
@@ -342,15 +440,21 @@ def _find_model_queries_bundle(workdir: Path, needle: str, replacement: str) -> 
     return None
 
 
-def _resign_codex_app() -> None:
-    # Electron validates app.asar through the bundle signature metadata at
-    # startup. Re-sign after patching so the modified archive does not trip the
-    # asar integrity check.
-    subprocess.run(
-        ["codesign", "--force", "--deep", "--sign", "-", "/Applications/Codex.app"],
-        check=True,
-    )
-    print("Re-signed Codex.app after patch.")
+def _sudo_prime() -> bool:
+    """Trigger one sudo password prompt up front so later sudo calls run silently."""
+    try:
+        subprocess.run(["sudo", "-v"], check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _asar_header_sha256(asar_path: Path) -> str:
+    """SHA-256 of the asar JSON header (what ElectronAsarIntegrity checks)."""
+    with asar_path.open("rb") as f:
+        _, _, _, json_size = struct.unpack("<4I", f.read(16))
+        header_json = f.read(json_size)
+    return hashlib.sha256(header_json).hexdigest()
 
 
 def _foreground_codex_app() -> None:
