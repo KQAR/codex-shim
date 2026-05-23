@@ -53,6 +53,15 @@ def responses_to_chat(body: dict[str, Any], upstream_model: str) -> dict[str, An
     _copy_if_present(body, chat, "max_tokens")
     _copy_if_present(body, chat, "parallel_tool_calls")
 
+    # Forward Codex's reasoning effort to OpenAI-compatible chat APIs.
+    # OpenAI accepts `reasoning_effort: "low|medium|high"` at the top
+    # level of the chat-completions body. Upstreams that don't recognize
+    # the field generally ignore it; this is safer than dropping the
+    # user's selection silently.
+    effort = _reasoning_effort(body)
+    if effort:
+        chat["reasoning_effort"] = effort
+
     tools = _responses_tools_to_chat_tools(body.get("tools"))
     if tools:
         chat["tools"] = tools
@@ -155,6 +164,25 @@ def responses_to_anthropic(body: dict[str, Any], upstream_model: str, max_tokens
         anthropic["system"] = "\n\n".join(system_parts)
     _copy_if_present(body, anthropic, "temperature")
     _copy_if_present(body, anthropic, "top_p")
+
+    # Forward Codex's reasoning effort as Anthropic adaptive thinking.
+    # Newer models (Claude Opus 4.7+, Sonnet 4.5+, on direct API and via
+    # Bedrock) reject the legacy `thinking.type: "enabled"` + budget_tokens
+    # shape with:
+    #   "thinking.type.enabled" is not supported for this model.
+    #   Use "thinking.type.adaptive" and "output_config.effort" …
+    # The new shape is `thinking: { type: "adaptive" }` plus
+    # `output_config: { effort: "low|medium|high|max" }`. We translate
+    # Codex's effort enum to that set. Bedrock's Anthropic endpoint
+    # passes both fields through unchanged.
+    effort = _anthropic_effort(body)
+    if effort is not None:
+        anthropic["thinking"] = {"type": "adaptive"}
+        anthropic["output_config"] = {"effort": effort}
+        # Anthropic forbids non-default sampling when adaptive thinking
+        # is enabled. Strip them rather than 400 the user.
+        anthropic.pop("temperature", None)
+        anthropic.pop("top_p", None)
 
     tools = _responses_tools_to_anthropic_tools(body.get("tools"))
     if tools:
@@ -411,6 +439,42 @@ def _responses_tools_to_anthropic_tools(tools: Any) -> list[dict[str, Any]]:
 def _copy_if_present(src: dict[str, Any], dst: dict[str, Any], src_key: str, dst_key: str | None = None) -> None:
     if src_key in src and src[src_key] is not None:
         dst[dst_key or src_key] = src[src_key]
+
+
+def _reasoning_effort(body: dict[str, Any]) -> str | None:
+    """Extract the user-selected reasoning effort from a Responses body.
+
+    Codex Desktop sends `reasoning: { effort: "low|medium|high|xhigh|minimal" }`
+    when the catalog entry advertises supports_reasoning_summaries=True.
+    We collapse "minimal"/"xhigh" onto OpenAI's accepted set when needed
+    by callers that don't pre-validate.
+    """
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return None
+    effort = reasoning.get("effort")
+    if not isinstance(effort, str):
+        return None
+    return effort
+
+
+# Map Codex's effort enum to Anthropic's adaptive-thinking effort enum.
+# Codex emits {minimal,low,medium,high,xhigh}; Anthropic accepts
+# {low,medium,high,max}. We collapse the ends.
+_ANTHROPIC_EFFORT = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "max",
+}
+
+
+def _anthropic_effort(body: dict[str, Any]) -> str | None:
+    effort = _reasoning_effort(body)
+    if effort is None:
+        return None
+    return _ANTHROPIC_EFFORT.get(effort)
 
 
 def _anthropic_stop(reason: Any) -> str:

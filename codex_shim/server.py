@@ -886,10 +886,12 @@ def _log_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
                     elif t == "function_call_output":
                         extra = f"(call_id={str(item.get('call_id', ''))[:24]})"
                     input_summary.append(f"{t}{extra}")
+        reasoning = body.get("reasoning")
         print(
             f"[req] {endpoint} model={body.get('model')!r} stream={body.get('stream')!r} "
             f"tools={len(tools)} ({names[:8]}) "
-            f"input={len(input_items)} ({input_summary})",
+            f"input={len(input_items)} ({input_summary}) "
+            f"reasoning={reasoning!r}",
             flush=True,
         )
     except Exception as exc:

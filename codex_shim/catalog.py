@@ -29,9 +29,16 @@ def catalog_entry(model: FactoryModel) -> dict:
             {"effort": "high", "description": "Deeper reasoning"},
             {"effort": "xhigh", "description": "Maximum reasoning where supported"},
         ],
-        "default_reasoning_summary": "none",
-        "reasoning_summary_format": "none",
-        "supports_reasoning_summaries": False,
+        # These three fields gate whether codex_app_server attaches the
+        # `reasoning: { effort: "low|medium|high|xhigh" }` block to outgoing
+        # requests. With the previous "none"/False combination Codex silently
+        # dropped the picker's reasoning-effort selection on the floor for
+        # BYOK models. Enable summaries (matching the GPT-5.5 passthrough
+        # entry) so the user's reasoning slider actually reaches the shim,
+        # which then forwards it to the upstream model.
+        "default_reasoning_summary": "auto",
+        "reasoning_summary_format": "experimental",
+        "supports_reasoning_summaries": True,
         "default_verbosity": "low",
         "support_verbosity": False,
         "apply_patch_tool_type": "freeform",
