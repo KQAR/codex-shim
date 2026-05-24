@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import signal
 import struct
@@ -326,8 +327,6 @@ def patch_codex_app() -> int:
     /Applications. App Management does not gate adding/removing entries in
     /Applications itself; only modifying an existing bundle in-place.
     """
-    needle = "let u=c.useHiddenModels&&o!==`amazonBedrock`,d;"
-    replacement = "let u=!1,d;"
 
     if not CODEX_APP_ASAR.exists():
         print(f"Codex app bundle not found at {CODEX_APP}.", file=sys.stderr)
@@ -363,19 +362,31 @@ def patch_codex_app() -> int:
         ["npx", "--yes", "@electron/asar", "extract", str(work_asar), str(extract_dir)],
         check=True,
     )
-    bundle_file = _find_model_queries_bundle(extract_dir, needle, replacement)
+    bundle_file = _find_model_queries_bundle(extract_dir)
     if bundle_file is None:
-        print("Could not find the expected model picker filter in Codex Desktop.", file=sys.stderr)
+        _patch_diag(extract_dir)
         return 1
     text = bundle_file.read_text()
-    if replacement in text and needle not in text:
-        print("Codex Desktop model picker patch is already applied (in source bundle).")
-    elif needle in text:
-        bundle_file.write_text(text.replace(needle, replacement))
-        print("Patched Codex Desktop model picker allowlist filter.")
+    new_text, n_subs = PICKER_FILTER_RE.subn(_picker_replacement, text)
+    if n_subs == 0:
+        if PATCHED_MARKER_RE.search(text):
+            print("Codex Desktop model picker patch is already applied (in source bundle).")
+        else:
+            print(
+                f"Could not find the expected model picker filter in {bundle_file.name}.",
+                file=sys.stderr,
+            )
+            _patch_diag(extract_dir)
+            return 1
     else:
-        print("Could not find the expected model picker filter in Codex Desktop.", file=sys.stderr)
-        return 1
+        if n_subs > 1:
+            print(
+                f"Warning: matched picker filter {n_subs} times in {bundle_file.name}; "
+                "expected exactly 1. Continuing anyway.",
+                file=sys.stderr,
+            )
+        bundle_file.write_text(new_text)
+        print(f"Patched Codex Desktop model picker allowlist filter in {bundle_file.name}.")
 
     new_asar = RUNTIME_DIR / "app.asar.new"
     if new_asar.exists():
@@ -387,8 +398,14 @@ def patch_codex_app() -> int:
     if not new_asar.exists() or new_asar.stat().st_size == 0:
         print(f"Repacked asar at {new_asar} is missing or empty.", file=sys.stderr)
         return 1
-    if needle.encode() in new_asar.read_bytes():
-        print("Repacked asar still contains the unpatched needle; aborting.", file=sys.stderr)
+    # Sanity check: the repacked asar must NOT still contain an un-patched
+    # picker filter. We search the raw binary; the asar header is JSON but the
+    # payload includes the JS bundle verbatim.
+    if PICKER_FILTER_RE.search(new_asar.read_bytes().decode("utf-8", errors="ignore")):
+        print(
+            "Repacked asar still contains an unpatched picker filter; aborting.",
+            file=sys.stderr,
+        )
         return 1
 
     # Replace the asar inside the work bundle (user-owned, no TCC barrier).
@@ -481,7 +498,37 @@ def _has_command(command: str) -> bool:
     return which(command) is not None
 
 
-def _find_model_queries_bundle(workdir: Path, needle: str, replacement: str) -> Path | None:
+# Model-picker hidden-model filter, as it appears in the minified webview bundle:
+#
+#     let u = c.useHiddenModels && o !== `amazonBedrock`, d;
+#
+# Variable names u/c/o/d come from webpack/esbuild and may rotate between
+# Codex builds. Match the structural shape, not the literal identifiers, so a
+# Codex update that re-mangles minified names doesn't silently break us.
+PICKER_FILTER_RE = re.compile(
+    r"let\s+(?P<u>\w+)\s*=\s*(?P<c>\w+)\.useHiddenModels"
+    r"\s*&&\s*(?P<o>\w+)\s*!==\s*`amazonBedrock`\s*,\s*(?P<rest>\w+)\s*;"
+)
+
+# After patching, the line collapses to `let u=!1,d;` (variables retained so
+# the rest of the function still references them). Detect it back to recognize
+# an already-patched bundle.
+PATCHED_MARKER_RE = re.compile(r"let\s+\w+\s*=\s*!1\s*,\s*\w+\s*;")
+
+
+def _picker_replacement(match: re.Match) -> str:
+    """Rewrite the matched picker filter to always-false, preserving variable
+    names so subsequent references in the bundle still resolve."""
+    return f"let {match.group('u')}=!1,{match.group('rest')};"
+
+
+def _find_model_queries_bundle(workdir: Path) -> Path | None:
+    """Locate the asset file containing the picker filter.
+
+    Codex Desktop ships the filter in a bundle named like
+    `webview/assets/model-queries-<hash>.js`. We match by content, not by
+    name, so a renamed file still works.
+    """
     assets_dir = workdir / "webview" / "assets"
     if not assets_dir.exists():
         return None
@@ -492,9 +539,22 @@ def _find_model_queries_bundle(workdir: Path, needle: str, replacement: str) -> 
             text = path.read_text()
         except UnicodeDecodeError:
             text = path.read_text(errors="ignore")
-        if needle in text or replacement in text:
+        if PICKER_FILTER_RE.search(text) or PATCHED_MARKER_RE.search(text):
             return path
     return None
+
+
+def _patch_diag(extract_dir: Path) -> None:
+    """Print actionable diagnostics when the picker filter can't be located."""
+    print(
+        "\nThis usually means Codex Desktop shipped a build whose minified picker\n"
+        "filter no longer matches the regex this version of codex-shim knows.\n"
+        "To debug, search the extracted webview for `useHiddenModels`:\n"
+        f"  grep -RIl useHiddenModels {extract_dir}/webview/assets/*.js\n"
+        "and inspect the surrounding line. Open an issue with the snippet so the\n"
+        "regex in cli.py PICKER_FILTER_RE can be updated.\n",
+        file=sys.stderr,
+    )
 
 
 def _sudo_prime() -> bool:
