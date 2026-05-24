@@ -31,6 +31,35 @@ def test_catalog_preserves_context_and_visibility():
     assert "free" in entry["available_in_plans"]
 
 
+def test_catalog_default_system_prompt_is_bundled_codex_style(tmp_path):
+    """BYOK entries default to the bundled codex_style.md so models get the
+    apply_patch protocol and parallel-tool-call discipline Codex Desktop
+    doesn't inject for non-OpenAI models."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"customModels": [{
+        "model": "x", "displayName": "X", "provider": "openai", "baseUrl": "http://x/v1"
+    }]}))
+    model = ShimSettings(settings).load()[0]
+    entry = catalog_entry(model)
+    assert len(entry["base_instructions"]) > 1500
+    assert "apply_patch" in entry["base_instructions"]
+
+
+def test_system_prompt_file_overrides_bundled(tmp_path):
+    """systemPromptFile, when set, replaces the bundled prompt."""
+    custom = tmp_path / "custom.md"
+    custom.write_text("CUSTOM_PROMPT_MARKER")
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"customModels": [{
+        "model": "x", "displayName": "X", "provider": "openai", "baseUrl": "http://x/v1",
+        "systemPromptFile": str(custom),
+    }]}))
+    model = ShimSettings(settings).load()[0]
+    entry = catalog_entry(model)
+    assert entry["base_instructions"] == "CUSTOM_PROMPT_MARKER"
+    assert entry["model_messages"]["instructions_template"] == "CUSTOM_PROMPT_MARKER"
+
+
 class ShimSettingsFixture:
     @staticmethod
     def one():

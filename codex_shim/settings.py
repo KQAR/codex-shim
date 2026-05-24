@@ -45,6 +45,15 @@ class ShimModel:
     # does not, and will return 400 if the header is sent. Pricing
     # doubles for tokens beyond 200K.
     context_beta_1m: bool = False
+    # Absolute or ~-relative path to a markdown file holding a custom
+    # system prompt. When unset, BYOK entries fall back to the bundled
+    # codex_shim/prompts/codex_style.md, which gives BYOK models the
+    # apply_patch protocol, parallel-tool-call discipline, and "act
+    # like Codex" working style that Codex Desktop's runtime context
+    # (sandbox / app-context / skills) does NOT inject for non-OpenAI
+    # models. Re-read every time `codex-shim generate` runs, so iterate
+    # on your prompt without restarting anything else.
+    system_prompt_file: str = ""
     extra_headers: dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -113,6 +122,7 @@ class ShimSettings:
                     max_output_tokens=max_output,
                     no_image_support=bool(row.get("noImageSupport", False)),
                     context_beta_1m=bool(row.get("contextBeta1M", False)),
+                    system_prompt_file=str(row.get("systemPromptFile") or ""),
                     extra_headers=extra_headers,
                     raw=row,
                 )

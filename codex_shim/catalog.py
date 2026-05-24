@@ -8,6 +8,36 @@ from .settings import PASSTHROUGH_SLUG, ShimModel, PROVIDER_NAME, default_model_
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
 
+# Path to the bundled Codex-style prompt. BYOK entries use it by default
+# because Codex Desktop's runtime context (sandbox / app-context / skills)
+# doesn't inject the apply_patch protocol, parallel tool-call discipline,
+# or "act like Codex" working style for non-OpenAI models — those have to
+# come from the catalog's base_instructions, which is what this prompt
+# fills in.
+_BUNDLED_PROMPT_PATH = Path(__file__).parent / "prompts" / "codex_style.md"
+
+
+def _resolve_system_prompt(model: ShimModel) -> str:
+    """Pick the system prompt to embed in this entry's catalog block.
+
+    1. systemPromptFile in settings.json — read from disk every time the
+       catalog is generated, so the user can iterate on their prompt
+       without restarting anything else.
+    2. Otherwise, fall back to the bundled codex_style.md.
+    """
+    if model.system_prompt_file:
+        path = Path(model.system_prompt_file).expanduser()
+        try:
+            return path.read_text()
+        except OSError as exc:
+            raise SystemExit(
+                f"systemPromptFile for slug {model.slug!r} could not be read: {exc}"
+            )
+    try:
+        return _BUNDLED_PROMPT_PATH.read_text()
+    except OSError as exc:
+        raise SystemExit(f"bundled codex_style.md missing: {exc}")
+
 
 def catalog_entry(model: ShimModel) -> dict:
     # Anthropic's 1M-context beta overrides whatever maxContextLimit the
@@ -65,16 +95,11 @@ def catalog_entry(model: ShimModel) -> dict:
         "available_in_plans": PLAN_TIERS,
         # base_instructions is a required field in Codex's catalog schema —
         # omitting it makes codex_app_server reject the whole catalog and
-        # fall back to defaults. We feed our own BYOK-specific prompt here.
-        "base_instructions": (
-            f"You are Codex, a coding agent running on {model.display_name} "
-            f"through a local BYOK shim. Be a helpful, direct coding collaborator."
-        ),
+        # fall back to defaults. The actual content is chosen by
+        # _resolve_system_prompt; see settings.py for the opt-in flags.
+        "base_instructions": _resolve_system_prompt(model),
         "model_messages": {
-            "instructions_template": (
-                f"You are Codex, a coding agent running on {model.display_name} "
-                f"through a local BYOK shim. Be a helpful, direct coding collaborator."
-            ),
+            "instructions_template": _resolve_system_prompt(model),
             "instructions_variables": {"model_name": model.display_name},
         },
     }

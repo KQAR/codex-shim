@@ -10,6 +10,12 @@ dependencies = [
 [project.scripts]
 codex-shim = "codex_shim.cli:main"
 
+# Ship bundled prompt files alongside the Python source so they survive
+# `pip install` and aren't lost when the package is moved out of an
+# editable checkout.
+[tool.setuptools.package-data]
+codex_shim = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

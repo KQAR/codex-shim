@@ -143,6 +143,7 @@ in your settings file and are read fresh on every request.
 | `maxOutputTokens` | Cap upstream `max_tokens` (Anthropic / Bedrock). |
 | `noImageSupport` | Hide image input from the picker for this entry. |
 | `contextBeta1M` | Anthropic 1M-context beta. Only valid for Sonnet 4/4.5 (direct Anthropic *and* Bedrock). Opus rejects it with 400. Pricing roughly doubles past 200K tokens. |
+| `systemPromptFile` | Absolute or `~`-relative path to a markdown file holding a custom system prompt. When unset, BYOK entries fall back to the bundled `codex_shim/prompts/codex_style.md`, which gives BYOK models the apply_patch protocol, parallel tool-call discipline, and "act like Codex" working style that Codex Desktop's runtime context (sandbox / app-context / skills) does not inject for non-OpenAI models. Re-read every time `codex-shim generate` runs. |
 | `extraHeaders` | Extra HTTP headers to send upstream. |
 
 Supported `provider` values:
