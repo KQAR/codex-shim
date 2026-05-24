@@ -133,6 +133,18 @@ originated as a Factory BYOK adapter):
 The shim **never copies your API keys** into the generated catalog. Keys stay
 in your settings file and are read fresh on every request.
 
+### Optional per-entry fields
+
+| field | effect |
+|---|---|
+| `apiKey` | Bearer token / API key. Required for non-passthrough providers. |
+| `displayName` | Picker label. Defaults to `model`. |
+| `maxContextLimit` | Override the catalog `context_window`. Defaults vary by model family. |
+| `maxOutputTokens` | Cap upstream `max_tokens` (Anthropic / Bedrock). |
+| `noImageSupport` | Hide image input from the picker for this entry. |
+| `contextBeta1M` | Anthropic 1M-context beta. Only valid for Sonnet 4/4.5 (direct Anthropic *and* Bedrock). Opus rejects it with 400. Pricing roughly doubles past 200K tokens. |
+| `extraHeaders` | Extra HTTP headers to send upstream. |
+
 Supported `provider` values:
 
 | provider | upstream API |

@@ -10,7 +10,13 @@ PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
 
 
 def catalog_entry(model: ShimModel) -> dict:
-    context = model.max_context_limit or _default_context(model)
+    # Anthropic's 1M-context beta overrides whatever maxContextLimit the
+    # user wrote — without raising the catalog ceiling, Codex Desktop's
+    # context meter would clamp at 200K and falsely flag overflow.
+    if model.context_beta_1m:
+        context = 1_000_000
+    else:
+        context = model.max_context_limit or _default_context(model)
     compact = max(8_000, int(context * 0.8))
     truncation = min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)

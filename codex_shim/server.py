@@ -217,6 +217,10 @@ class ShimServer:
             "Authorization": f"Bearer {route.api_key}",
             **route.extra_headers,
         }
+        if route.context_beta_1m:
+            # Bedrock accepts the same beta header as direct Anthropic for
+            # Sonnet 4 / 4.5. Opus on Bedrock will reject it with 400.
+            headers["anthropic-beta"] = "context-1m-2025-08-07"
 
         async with ClientSession(timeout=self.timeout, trust_env=True) as session:
             upstream = await session.post(url, json=bedrock_body, headers=headers)
@@ -904,6 +908,8 @@ def _anthropic_headers(route: ShimModel) -> dict[str, str]:
         "anthropic-version": "2023-06-01",
         **route.extra_headers,
     }
+    if route.context_beta_1m:
+        headers["anthropic-beta"] = "context-1m-2025-08-07"
     if route.api_key:
         headers.setdefault("x-api-key", route.api_key)
         headers.setdefault("Authorization", f"Bearer {route.api_key}")

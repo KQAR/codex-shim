@@ -38,6 +38,13 @@ class ShimModel:
     max_context_limit: int | None = None
     max_output_tokens: int | None = None
     no_image_support: bool = False
+    # Opt into Anthropic's 1M-token context beta. When true, the shim
+    # advertises context_window=1_000_000 in the catalog and adds the
+    # `anthropic-beta: context-1m-2025-08-07` header on outgoing
+    # Anthropic / Bedrock requests. Sonnet 4 and 4.5 support this; Opus
+    # does not, and will return 400 if the header is sent. Pricing
+    # doubles for tokens beyond 200K.
+    context_beta_1m: bool = False
     extra_headers: dict[str, str] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -105,6 +112,7 @@ class ShimSettings:
                     max_context_limit=max_context,
                     max_output_tokens=max_output,
                     no_image_support=bool(row.get("noImageSupport", False)),
+                    context_beta_1m=bool(row.get("contextBeta1M", False)),
                     extra_headers=extra_headers,
                     raw=row,
                 )
