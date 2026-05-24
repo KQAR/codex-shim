@@ -52,8 +52,9 @@ def test_chat_completion_to_response_strips_think():
 
 
 def test_anthropic_usage_translation_folds_cache_tokens_into_prompt():
-    """Cache tokens are billed as part of the input budget, so Codex's
-    progress bar should count them as prompt_tokens."""
+    """Cache tokens are billed as part of the input budget. The result must
+    expose Anthropic-style fields (Codex Desktop's Responses parser hard-
+    requires input_tokens) and the OpenAI legacy aliases."""
     out = anthropic_usage_to_openai({
         "input_tokens": 100,
         "cache_read_input_tokens": 50,
@@ -61,7 +62,9 @@ def test_anthropic_usage_translation_folds_cache_tokens_into_prompt():
         "output_tokens": 200,
     })
     assert out == {
-        "prompt_tokens": 175,  # 100 + 50 + 25
+        "input_tokens": 175,  # 100 + 50 + 25
+        "output_tokens": 200,
+        "prompt_tokens": 175,
         "completion_tokens": 200,
         "total_tokens": 375,
     }
@@ -78,6 +81,8 @@ def test_anthropic_to_chat_response_emits_usage():
     }
     out = anthropic_to_chat_response(payload, "slug")
     assert out["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 5,
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,

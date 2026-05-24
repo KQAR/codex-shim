@@ -815,9 +815,18 @@ class ResponsesStreamState:
             "output": output,
         }
         if final and self._usage_seen:
-            # Codex Desktop reads usage to render the context-window meter.
-            # Emit the OpenAI shape regardless of upstream provider.
+            # Codex Desktop's Responses-API parser requires the Anthropic-shape
+            # usage block (input_tokens / output_tokens). Emitting only the
+            # OpenAI shape (prompt_tokens / completion_tokens) makes
+            # codex_app_server fail to parse response.completed and the GUI
+            # reconnects in a loop:
+            #     stream disconnected before completion: failed to parse
+            #     ResponseCompleted: missing field `input_tokens`
+            # We include the OpenAI aliases too for any consumer that still
+            # reads them.
             body["usage"] = {
+                "input_tokens": self._usage_input_tokens,
+                "output_tokens": self._usage_output_tokens,
                 "prompt_tokens": self._usage_input_tokens,
                 "completion_tokens": self._usage_output_tokens,
                 "total_tokens": self._usage_input_tokens + self._usage_output_tokens,
@@ -978,13 +987,16 @@ def _log_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
         if isinstance(input_items, list):
             for item in input_items[-6:]:
                 if isinstance(item, dict):
-                    t = item.get("type") or item.get("role") or "?"
+                    t = item.get("type") or "?"
+                    role = item.get("role") or "?"
                     extra = ""
                     if t == "function_call":
                         extra = f"({item.get('name', '?')})"
                     elif t == "function_call_output":
                         extra = f"(call_id={str(item.get('call_id', ''))[:24]})"
-                    input_summary.append(f"{t}{extra}")
+                    elif t == "reasoning":
+                        extra = "(reasoning)"
+                    input_summary.append(f"{t}/{role}{extra}")
         reasoning = body.get("reasoning")
         print(
             f"[req] {endpoint} model={body.get('model')!r} stream={body.get('stream')!r} "

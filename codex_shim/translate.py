@@ -159,6 +159,16 @@ def responses_to_anthropic(body: dict[str, Any], upstream_model: str, max_tokens
     if pending_thinking:
         append("assistant", pending_thinking)
 
+    # Anthropic requires the conversation to end with a user message (a
+    # trailing assistant message is interpreted as a prefill request, which
+    # is rejected outright when adaptive thinking is enabled and otherwise
+    # confusing). Codex Desktop's resume / fork flow sometimes hands us an
+    # input list whose last item is an assistant turn (e.g. `reasoning` only,
+    # or a leftover assistant message from a previous turn). Trim trailing
+    # assistant turns so what we send always ends with a user / tool_result.
+    while messages and messages[-1]["role"] == "assistant":
+        messages.pop()
+
     anthropic: dict[str, Any] = {
         "model": upstream_model,
         "messages": messages or [{"role": "user", "content": ""}],
@@ -259,13 +269,13 @@ def anthropic_to_chat_response(payload: dict[str, Any], requested_model: str) ->
 
 
 def anthropic_usage_to_openai(usage: Any) -> dict[str, int] | None:
-    """Convert Anthropic's usage shape to OpenAI's so Codex Desktop's
-    progress bar can read it. Codex computes context-window utilization as
-    (prompt_tokens + completion_tokens) / max_context_window — without these
-    fields it can't render the percentage at all.
+    """Convert Anthropic's usage shape to a Codex-compatible OpenAI-ish
+    shape that exposes the Anthropic-style fields Codex Desktop's Responses
+    parser requires (input_tokens / output_tokens), plus the OpenAI legacy
+    aliases for any consumer that still reads those.
 
     Cache tokens contribute to the prompt budget, so we fold
-    cache_read_input_tokens + cache_creation_input_tokens into prompt_tokens.
+    cache_read_input_tokens + cache_creation_input_tokens into the input.
     """
     if not isinstance(usage, dict):
         return None
@@ -275,9 +285,30 @@ def anthropic_usage_to_openai(usage: Any) -> dict[str, int] | None:
     output_tokens = int(usage.get("output_tokens") or 0)
     prompt_tokens = input_tokens + cache_read + cache_creation
     return {
+        # Anthropic / Codex-Responses primary fields.
+        "input_tokens": prompt_tokens,
+        "output_tokens": output_tokens,
+        # OpenAI legacy aliases for compatibility with other readers.
         "prompt_tokens": prompt_tokens,
         "completion_tokens": output_tokens,
         "total_tokens": prompt_tokens + output_tokens,
+    }
+
+
+def openai_usage_to_codex(usage: Any) -> dict[str, int] | None:
+    """Same target shape as anthropic_usage_to_openai, but starting from an
+    OpenAI chat-completions usage block (prompt_tokens / completion_tokens).
+    Used on the non-streaming OpenAI / generic-chat path."""
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    return {
+        "input_tokens": prompt_tokens,
+        "output_tokens": completion_tokens,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
     }
 
 
@@ -308,6 +339,15 @@ def chat_completion_to_response(payload: dict[str, Any], requested_model: str) -
                 "arguments": fn.get("arguments", ""),
             }
         )
+    raw_usage = payload.get("usage")
+    # Codex Desktop's Responses parser requires input_tokens / output_tokens,
+    # not the OpenAI prompt_tokens / completion_tokens shape; rejecting this
+    # makes the GUI "Reconnecting…" loop until retry exhausts. Normalize
+    # whichever shape we got into the dual-key form.
+    if raw_usage and "input_tokens" in raw_usage:
+        usage = anthropic_usage_to_openai(raw_usage)
+    else:
+        usage = openai_usage_to_codex(raw_usage)
     return {
         "id": payload.get("id", "resp_chat"),
         "object": "response",
@@ -315,7 +355,7 @@ def chat_completion_to_response(payload: dict[str, Any], requested_model: str) -
         "status": "completed",
         "model": requested_model,
         "output": output,
-        "usage": payload.get("usage"),
+        "usage": usage,
     }
 
 
