@@ -8,13 +8,23 @@ from .settings import PASSTHROUGH_SLUG, ShimModel, PROVIDER_NAME, default_model_
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
 
-# Path to the bundled Codex-style prompt. BYOK entries use it by default
-# because Codex Desktop's runtime context (sandbox / app-context / skills)
-# doesn't inject the apply_patch protocol, parallel tool-call discipline,
-# or "act like Codex" working style for non-OpenAI models — those have to
-# come from the catalog's base_instructions, which is what this prompt
-# fills in.
-_BUNDLED_PROMPT_PATH = Path(__file__).parent / "prompts" / "codex_style.md"
+# Bundled Codex-style prompts. BYOK entries pick one based on upstream
+# provider so each model family gets phrasing that suits its conventions
+# (Anthropic prefers tighter prose; OpenAI tolerates more directives;
+# generic chat-completions backends get a middle-ground version).
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+_BUNDLED_PROMPTS = {
+    # Anthropic-family models (direct Anthropic API + Bedrock-hosted Claude).
+    "anthropic": _PROMPTS_DIR / "codex_style_anthropic.md",
+    "bedrock": _PROMPTS_DIR / "codex_style_anthropic.md",
+    # OpenAI-shaped chat completions where the upstream is actually OpenAI.
+    "openai": _PROMPTS_DIR / "codex_style_openai.md",
+    # Generic OpenAI-shaped chat completions (DeepSeek, Volc Engine ark,
+    # OpenRouter routing to non-OpenAI models, etc.).
+    "generic-chat-completion-api": _PROMPTS_DIR / "codex_style_generic.md",
+}
+# Last-resort fallback for an unrecognised provider string.
+_DEFAULT_BUNDLED_PROMPT = _PROMPTS_DIR / "codex_style_generic.md"
 
 
 def _resolve_system_prompt(model: ShimModel) -> str:
@@ -23,7 +33,10 @@ def _resolve_system_prompt(model: ShimModel) -> str:
     1. systemPromptFile in settings.json — read from disk every time the
        catalog is generated, so the user can iterate on their prompt
        without restarting anything else.
-    2. Otherwise, fall back to the bundled codex_style.md.
+    2. Otherwise, fall back to the bundled prompt that matches the
+       entry's provider (anthropic / bedrock / openai /
+       generic-chat-completion-api). Unknown providers get the generic
+       prompt as a safe default.
     """
     if model.system_prompt_file:
         path = Path(model.system_prompt_file).expanduser()
@@ -33,10 +46,11 @@ def _resolve_system_prompt(model: ShimModel) -> str:
             raise SystemExit(
                 f"systemPromptFile for slug {model.slug!r} could not be read: {exc}"
             )
+    bundled_path = _BUNDLED_PROMPTS.get(model.provider, _DEFAULT_BUNDLED_PROMPT)
     try:
-        return _BUNDLED_PROMPT_PATH.read_text()
+        return bundled_path.read_text()
     except OSError as exc:
-        raise SystemExit(f"bundled codex_style.md missing: {exc}")
+        raise SystemExit(f"bundled prompt {bundled_path} missing: {exc}")
 
 
 def catalog_entry(model: ShimModel) -> dict:
