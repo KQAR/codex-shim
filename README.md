@@ -16,19 +16,24 @@ generic-chat-completion-api / AWS Bedrock / ChatGPT subscription).
 > uses (this project started as a Factory BYOK adapter), so a Factory
 > `settings.json` works as-is if you copy it to `~/.codex-shim/settings.json`.
 
-> Status: tested on Codex Desktop **0.133.0-alpha.1** for macOS arm64.
-> Linux/Windows users should be able to skip the ASAR patch section and use the
-> shim itself unchanged.
+> Status: developed against Codex Desktop on macOS arm64 (current
+> production release). The picker patch targets a specific minified
+> filter expression in `app.asar`; if Codex ships a webpack/esbuild
+> rebuild that mangles variable names differently the patch may need
+> updating — `codex-shim patch-app` will tell you when it can no
+> longer find the expected snippet. Linux/Windows users should be
+> able to skip the ASAR patch section and use the shim itself
+> unchanged.
 
 ---
 
 ## Why
 
 Codex Desktop only shows the models its server-side Statsig config whitelists.
-If you have OpenAI / Anthropic / Z.ai / DeepSeek / Gemini / OpenRouter / Factory
-keys you'd like to use **as first-class models in the picker**, this gets you
-there. It also lets you keep your ChatGPT subscription's GPT‑5.5 visible
-alongside everything else.
+If you have OpenAI / Anthropic / AWS Bedrock / Z.ai / DeepSeek / Gemini /
+OpenRouter keys you'd like to use **as first-class models in the picker**,
+this gets you there. It also lets you keep your ChatGPT subscription's
+GPT‑5.5 visible alongside everything else.
 
 ---
 
@@ -166,10 +171,24 @@ Codex Desktop has a Statsig server-side allowlist (`use_hidden_models: true`)
 that hides any model whose slug isn't on a hardcoded list. Custom catalog
 entries fall into the hidden bucket and never render in the picker.
 
-A single‑boolean ASAR patch flips the allowlist branch off so the picker only
-checks the local `hidden` flag (which our catalog never sets).
+**Use the bundled command:**
 
-> **Always back up `app.asar` and `Info.plist` before patching.**
+```bash
+codex-shim patch-app
+```
+
+This handles the whole flow correctly: copies the bundle into a workdir
+(macOS App Management blocks in-place modification of notarized bundles
+under /Applications), patches the asar, recomputes the
+`ElectronAsarIntegrity` SHA-256, ad-hoc re-signs, and atomically swaps
+the patched bundle into /Applications. Original is preserved at
+`/Applications/Codex.app.unpatched-<timestamp>` and `codex-shim
+restore-app` reverses everything.
+
+If you'd rather do it by hand (or `patch-app` failed because Codex
+shipped a webpack rebuild that mangled the picker filter), the manual
+flow follows. **Always back up `app.asar` and `Info.plist` before
+patching.**
 
 ```bash
 APP=/Applications/Codex.app
@@ -290,11 +309,15 @@ codex-shim start            start local shim daemon
 codex-shim status           health check + model count
 codex-shim stop             stop daemon
 codex-shim restart          restart daemon
-codex-shim list             list generated slugs and Factory routes
+codex-shim enable           start daemon AND write managed config to ~/.codex
+codex-shim disable          stop daemon AND remove managed config from ~/.codex
+codex-shim list             list catalog slugs and their upstream routes
 codex-shim model list       list slugs currently usable in the picker
 codex-shim model use <slug> set the Desktop default model
 codex-shim codex -- <args>  exec `codex` CLI through the shim
 codex-shim app [path]       launch Codex Desktop through the shim
+codex-shim patch-app        patch Codex Desktop's picker to allow custom slugs
+codex-shim restore-app      undo patch-app (restore original app bundle)
 
 codex-app [path]            shortcut for `codex-shim app`
 codex-model [list|<slug>]   shortcut for `codex-shim model …`
