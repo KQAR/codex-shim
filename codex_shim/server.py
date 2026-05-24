@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 
 from .bedrock_stream import BedrockStreamError, iter_anthropic_events
-from .settings import DEFAULT_FACTORY_SETTINGS, DEFAULT_HOST, DEFAULT_PORT, FactoryModel, FactorySettings
+from .settings import DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SETTINGS_PATH, FactoryModel, FactorySettings
 from .translate import (
     anthropic_body_to_bedrock,
     anthropic_to_chat_response,
@@ -24,7 +24,7 @@ from .translate import (
 
 
 class ShimServer:
-    def __init__(self, settings_path: Path = DEFAULT_FACTORY_SETTINGS):
+    def __init__(self, settings_path: Path = DEFAULT_SETTINGS_PATH):
         self.settings = FactorySettings(settings_path)
         self.timeout = ClientTimeout(total=None, sock_connect=120, sock_read=None)
 
@@ -928,7 +928,7 @@ async def _error_response(upstream) -> web.Response:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--settings", type=Path, default=DEFAULT_FACTORY_SETTINGS)
+    parser.add_argument("--settings", type=Path, default=DEFAULT_SETTINGS_PATH)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args(argv)

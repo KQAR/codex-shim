@@ -7,9 +7,12 @@ import re
 from typing import Any
 
 
-DEFAULT_FACTORY_SETTINGS = Path.home() / ".factory" / "settings.json"
+DEFAULT_SETTINGS_PATH = Path.home() / ".codex-shim" / "settings.json"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+# Codex provider id written into ~/.codex/config.toml. Renaming this would
+# break every existing user's config, so we keep it even though the project
+# is no longer tied to factory.ai. Treat the literal as a stable interface.
 PROVIDER_NAME = "factory_byok_shim"
 
 
@@ -47,7 +50,7 @@ class FactoryModel:
 
 
 class FactorySettings:
-    def __init__(self, path: Path = DEFAULT_FACTORY_SETTINGS):
+    def __init__(self, path: Path = DEFAULT_SETTINGS_PATH):
         self.path = Path(path).expanduser()
 
     def load(self) -> list[FactoryModel]:

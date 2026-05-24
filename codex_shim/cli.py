@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from .catalog import codex_config_overrides, write_catalog, write_config
-from .settings import DEFAULT_FACTORY_SETTINGS, DEFAULT_HOST, DEFAULT_PORT, FactorySettings, default_model_slug
+from .settings import DEFAULT_SETTINGS_PATH, DEFAULT_HOST, DEFAULT_PORT, FactorySettings, default_model_slug
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +30,7 @@ MANAGED_END = "# <<< codex-shim managed <<<"
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-shim")
-    parser.add_argument("--settings", type=Path, default=DEFAULT_FACTORY_SETTINGS)
+    parser.add_argument("--settings", type=Path, default=DEFAULT_SETTINGS_PATH)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("generate")

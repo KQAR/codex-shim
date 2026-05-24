@@ -1,13 +1,20 @@
 # codex-shim
 
-Run **Codex Desktop** with any model declared in your `~/.factory/settings.json`
-(or any custom JSON file), plus an optional passthrough to your **ChatGPT
-subscription's GPT‑5.5** — without recompiling Codex.
+Run **Codex Desktop** with any model declared in your
+`~/.codex-shim/settings.json` (or any custom JSON file), plus an optional
+passthrough to your **ChatGPT subscription's GPT‑5.5** — without recompiling
+Codex.
 
 The shim is a small local Python server that pretends to be an OpenAI Responses
 API endpoint. Codex points at it; the shim routes each request to whatever
-upstream the matching Factory BYOK entry uses (OpenAI / Anthropic /
-generic-chat-completion-api / ChatGPT subscription).
+upstream the matching catalog entry uses (OpenAI / Anthropic /
+generic-chat-completion-api / AWS Bedrock / ChatGPT subscription).
+
+> Note: the internal Codex provider id is still `factory_byok_shim` for
+> backwards compatibility — renaming it would break every existing user's
+> `~/.codex/config.toml`. The settings file format is the same one Factory.ai
+> uses (this project started as a Factory BYOK adapter), so a Factory
+> `settings.json` works as-is if you copy it to `~/.codex-shim/settings.json`.
 
 > Status: tested on Codex Desktop **0.133.0-alpha.1** for macOS arm64.
 > Linux/Windows users should be able to skip the ASAR patch section and use the
@@ -45,7 +52,7 @@ Requires Python 3.11+.
 ### 1. Generate the catalog and start the shim
 
 ```bash
-codex-shim generate          # reads ~/.factory/settings.json, writes catalog
+codex-shim generate          # reads ~/.codex-shim/settings.json, writes catalog
 codex-shim start             # background daemon on 127.0.0.1:8765
 codex-shim list              # show generated slugs and upstream routes
 codex-shim status            # health probe
@@ -59,7 +66,7 @@ codex-shim app .             # launch Codex with the shim wired in
 
 That command applies opt-in `-c` overrides only for this launch. Your
 `~/.codex/config.toml` is left untouched. After this Codex Desktop sees every
-entry from `~/.factory/settings.json` plus an optional `OpenAI GPT-5.5
+entry from `~/.codex-shim/settings.json` plus an optional `OpenAI GPT-5.5
 (ChatGPT)` slug as picker entries.
 
 If your Codex Desktop's model picker only shows "default" and refuses to render
@@ -77,15 +84,16 @@ codex-app                     # relaunch Codex with new default
 
 ## Custom config file
 
-The shim defaults to `~/.factory/settings.json` (the file Factory.ai writes
-when you save BYOK custom models). You can point it at any file:
+The shim defaults to `~/.codex-shim/settings.json`. You can point it at any
+file:
 
 ```bash
 codex-shim --settings /path/to/my-models.json generate
 codex-shim --settings /path/to/my-models.json start
 ```
 
-Schema expected (Factory's own format):
+Schema (matches Factory.ai's own `customModels` format, since this project
+originated as a Factory BYOK adapter):
 
 ```json
 {
