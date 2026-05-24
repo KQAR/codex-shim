@@ -311,8 +311,6 @@ def _codex_gui_running() -> bool:
 CODEX_APP = Path("/Applications/Codex.app")
 CODEX_APP_ASAR = CODEX_APP / "Contents" / "Resources" / "app.asar"
 CODEX_APP_INFO_PLIST = CODEX_APP / "Contents" / "Info.plist"
-ASAR_BACKUP = RUNTIME_DIR / "app.asar.before-codex-shim-model-picker-patch"
-INFO_PLIST_BACKUP = RUNTIME_DIR / "Info.plist.before-codex-shim-model-picker-patch"
 BUNDLE_BACKUP_LINK = RUNTIME_DIR / "Codex.app.bundle-backup"
 
 
@@ -336,12 +334,6 @@ def patch_codex_app() -> int:
         return 1
 
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    if not ASAR_BACKUP.exists():
-        ASAR_BACKUP.write_bytes(CODEX_APP_ASAR.read_bytes())
-        print(f"Backed up original app.asar to {ASAR_BACKUP}.")
-    if not INFO_PLIST_BACKUP.exists():
-        INFO_PLIST_BACKUP.write_bytes(CODEX_APP_INFO_PLIST.read_bytes())
-        print(f"Backed up original Info.plist to {INFO_PLIST_BACKUP}.")
 
     _quit_codex_app()
 
