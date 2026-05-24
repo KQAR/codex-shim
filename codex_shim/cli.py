@@ -14,7 +14,14 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from .catalog import codex_config_overrides, write_catalog, write_config
-from .settings import DEFAULT_SETTINGS_PATH, DEFAULT_HOST, DEFAULT_PORT, ShimSettings, default_model_slug
+from .settings import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    DEFAULT_SETTINGS_PATH,
+    PROVIDER_NAME,
+    ShimSettings,
+    default_model_slug,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -133,7 +140,7 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
         CODEX_CONFIG_BACKUP_PATH.write_text(original)
     cleaned = _remove_managed_config(original)
     cleaned = _remove_top_level_keys(cleaned, {"model", "model_provider", "model_catalog_json"})
-    cleaned = _remove_section(cleaned, "model_providers.factory_byok_shim")
+    cleaned = _remove_section(cleaned, f"model_providers.{PROVIDER_NAME}")
     top_block, provider_block = _managed_config_blocks(default_slug, port)
     new_text = top_block + "\n" + cleaned.lstrip() + "\n" + provider_block
     # Defensive sanity check: a well-formed managed install has exactly two
@@ -219,7 +226,7 @@ def restore_codex_config() -> None:
     if CODEX_CONFIG_PATH.exists():
         current = CODEX_CONFIG_PATH.read_text()
         restored = _remove_managed_config(current)
-        restored = _remove_section(restored, "model_providers.factory_byok_shim")
+        restored = _remove_section(restored, f"model_providers.{PROVIDER_NAME}")
         CODEX_CONFIG_PATH.write_text(restored.lstrip())
         print(f"Removed shim config from {CODEX_CONFIG_PATH}.")
 
@@ -595,13 +602,13 @@ end tell
 def _managed_config_blocks(default_slug: str, port: int) -> tuple[str, str]:
     top_block = f'''{MANAGED_BEGIN}
 model = "{default_slug}"
-model_provider = "factory_byok_shim"
+model_provider = "{PROVIDER_NAME}"
 model_catalog_json = "{CATALOG_PATH}"
 {MANAGED_END}
 '''
 
     provider_block = f'''{MANAGED_BEGIN}
-[model_providers.factory_byok_shim]
+[model_providers.{PROVIDER_NAME}]
 name = "Codex BYOK Shim"
 base_url = "http://127.0.0.1:{port}/v1"
 wire_api = "responses"
