@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from codex_shim.catalog import catalog_entry
-from codex_shim.settings import FactorySettings
+from codex_shim.settings import ShimSettings
 
 
 def test_duplicate_models_get_unique_display_slugs(tmp_path):
@@ -18,12 +18,12 @@ def test_duplicate_models_get_unique_display_slugs(tmp_path):
             }
         )
     )
-    models = FactorySettings(settings).load()
+    models = ShimSettings(settings).load()
     assert [m.slug for m in models] == ["fast-high", "fast-low"]
 
 
 def test_catalog_preserves_context_and_visibility():
-    model = FactorySettingsFixture.one()
+    model = ShimSettingsFixture.one()
     entry = catalog_entry(model)
     assert entry["slug"] == "claude-opus"
     assert entry["visibility"] == "list"
@@ -31,7 +31,7 @@ def test_catalog_preserves_context_and_visibility():
     assert "free" in entry["available_in_plans"]
 
 
-class FactorySettingsFixture:
+class ShimSettingsFixture:
     @staticmethod
     def one():
         import tempfile
@@ -53,5 +53,5 @@ class FactorySettingsFixture:
                 }
             )
         )
-        return FactorySettings(path).load()[0]
+        return ShimSettings(path).load()[0]
 

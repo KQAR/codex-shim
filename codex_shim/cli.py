@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from .catalog import codex_config_overrides, write_catalog, write_config
-from .settings import DEFAULT_SETTINGS_PATH, DEFAULT_HOST, DEFAULT_PORT, FactorySettings, default_model_slug
+from .settings import DEFAULT_SETTINGS_PATH, DEFAULT_HOST, DEFAULT_PORT, ShimSettings, default_model_slug
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def generate(settings_path: Path, port: int) -> None:
-    models = FactorySettings(settings_path).load()
+    models = ShimSettings(settings_path).load()
     write_catalog(models, CATALOG_PATH)
     write_config(models, CONFIG_PATH, CATALOG_PATH, port)
     print(f"Generated {len(models)} model entries:")
@@ -123,7 +123,7 @@ def generate(settings_path: Path, port: int) -> None:
 
 
 def install_codex_config(settings_path: Path, port: int, model_slug: str | None = None) -> None:
-    models = FactorySettings(settings_path).load()
+    models = ShimSettings(settings_path).load()
     default_slug = _resolve_model_slug(models, model_slug)
     CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -151,7 +151,7 @@ def install_codex_config(settings_path: Path, port: int, model_slug: str | None 
 
 
 def list_models(settings_path: Path) -> int:
-    models = FactorySettings(settings_path).load()
+    models = ShimSettings(settings_path).load()
     width = max([len(m.slug) for m in models] + [4])
     for model in models:
         print(f"{model.slug:<{width}}  {model.display_name}  ->  {model.model} ({model.provider})")
@@ -550,7 +550,7 @@ model_catalog_json = "{CATALOG_PATH}"
 
     provider_block = f'''{MANAGED_BEGIN}
 [model_providers.factory_byok_shim]
-name = "Factory BYOK Shim"
+name = "Codex BYOK Shim"
 base_url = "http://127.0.0.1:{port}/v1"
 wire_api = "responses"
 experimental_bearer_token = "dummy"
@@ -604,7 +604,7 @@ def _remove_section(text: str, section: str) -> str:
 
 
 def _override_args(settings_path: Path, port: int) -> list[str]:
-    models = FactorySettings(settings_path).load()
+    models = ShimSettings(settings_path).load()
     default_slug = default_model_slug(models)
     pairs = codex_config_overrides(CATALOG_PATH, default_slug, port)
     args: list[str] = []

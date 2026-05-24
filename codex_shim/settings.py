@@ -27,7 +27,7 @@ def slugify(value: str) -> str:
 
 
 @dataclass(frozen=True)
-class FactoryModel:
+class ShimModel:
     slug: str
     model: str
     display_name: str
@@ -54,11 +54,11 @@ class FactoryModel:
         return self.provider == "bedrock"
 
 
-class FactorySettings:
+class ShimSettings:
     def __init__(self, path: Path = DEFAULT_SETTINGS_PATH):
         self.path = Path(path).expanduser()
 
-    def load(self) -> list[FactoryModel]:
+    def load(self) -> list[ShimModel]:
         data = json.loads(self.path.read_text())
         rows = data.get("customModels", [])
         model_counts: dict[str, int] = {}
@@ -68,7 +68,7 @@ class FactorySettings:
                 model_counts[model] = model_counts.get(model, 0) + 1
 
         used: set[str] = set()
-        models: list[FactoryModel] = []
+        models: list[ShimModel] = []
         for fallback_index, row in enumerate(rows):
             model = str(row.get("model") or "").strip()
             provider = str(row.get("provider") or "").strip()
@@ -94,7 +94,7 @@ class FactorySettings:
                 if v is not None
             }
             models.append(
-                FactoryModel(
+                ShimModel(
                     slug=slug,
                     model=model,
                     display_name=display_name,
@@ -111,7 +111,7 @@ class FactorySettings:
             )
         return models
 
-    def by_slug_or_model(self, requested: str) -> FactoryModel | None:
+    def by_slug_or_model(self, requested: str) -> ShimModel | None:
         models = self.load()
         by_slug = {m.slug: m for m in models}
         if requested in by_slug:
@@ -131,7 +131,7 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def default_model_slug(models: list[FactoryModel]) -> str:
+def default_model_slug(models: list[ShimModel]) -> str:
     """Return the slug Codex Desktop should default to.
 
     `catalog.write_catalog` always injects the synthetic passthrough entry,
