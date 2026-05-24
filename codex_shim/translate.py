@@ -47,6 +47,11 @@ def responses_to_chat(body: dict[str, Any], upstream_model: str) -> dict[str, An
         "messages": messages or [{"role": "user", "content": ""}],
         "stream": bool(body.get("stream", False)),
     }
+    # Ask upstream to emit a terminal usage chunk so we can populate the
+    # response.completed event with prompt/completion token counts. Codex
+    # Desktop reads these to render the context-window meter.
+    if chat["stream"]:
+        chat["stream_options"] = {"include_usage": True}
     _copy_if_present(body, chat, "temperature")
     _copy_if_present(body, chat, "top_p")
     _copy_if_present(body, chat, "max_output_tokens", "max_tokens")
@@ -249,6 +254,30 @@ def anthropic_to_chat_response(payload: dict[str, Any], requested_model: str) ->
         "created": 0,
         "model": requested_model,
         "choices": [{"index": 0, "message": message, "finish_reason": _anthropic_stop(payload.get("stop_reason"))}],
+        "usage": anthropic_usage_to_openai(payload.get("usage")),
+    }
+
+
+def anthropic_usage_to_openai(usage: Any) -> dict[str, int] | None:
+    """Convert Anthropic's usage shape to OpenAI's so Codex Desktop's
+    progress bar can read it. Codex computes context-window utilization as
+    (prompt_tokens + completion_tokens) / max_context_window — without these
+    fields it can't render the percentage at all.
+
+    Cache tokens contribute to the prompt budget, so we fold
+    cache_read_input_tokens + cache_creation_input_tokens into prompt_tokens.
+    """
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = int(usage.get("input_tokens") or 0)
+    cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+    output_tokens = int(usage.get("output_tokens") or 0)
+    prompt_tokens = input_tokens + cache_read + cache_creation
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": prompt_tokens + output_tokens,
     }
 
 

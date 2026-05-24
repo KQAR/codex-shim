@@ -359,6 +359,13 @@ class ResponsesStreamState:
         # Reasoning (extended thinking) blocks, keyed by upstream index.
         self.reasoning_blocks: dict[Any, dict[str, Any]] = {}
         self.next_output_index = 0
+        # Token usage accumulator for the eventual response.completed event.
+        # Anthropic streams it across two events (input on message_start,
+        # output on message_delta). OpenAI streams it in a final usage chunk
+        # when stream_options.include_usage is set. Both feed in here.
+        self._usage_input_tokens = 0
+        self._usage_output_tokens = 0
+        self._usage_seen = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -382,6 +389,10 @@ class ResponsesStreamState:
     # Chat-completions (OpenAI-style) deltas
     # ------------------------------------------------------------------
     async def write_chat_delta(self, response: web.StreamResponse, chunk: dict[str, Any]) -> None:
+        # The terminal usage chunk has `choices: []` and a top-level `usage`
+        # object (OpenAI's stream_options.include_usage convention).
+        if "usage" in chunk:
+            self.record_chat_usage(chunk.get("usage"))
         choice = (chunk.get("choices") or [{}])[0]
         delta = choice.get("delta") or {}
         reasoning = delta.get("reasoning_content") or delta.get("reasoning")
@@ -437,6 +448,15 @@ class ResponsesStreamState:
     # ------------------------------------------------------------------
     async def write_anthropic_delta(self, response: web.StreamResponse, event: dict[str, Any]) -> None:
         event_type = event.get("type")
+        if event_type == "message_start":
+            self.record_anthropic_message_start(event.get("message"))
+            return
+        if event_type == "message_delta":
+            # message_delta carries the running output_tokens count.
+            self.record_anthropic_message_delta(event)
+            # Don't return — message_delta also carries stop_reason which the
+            # rest of the pipeline doesn't consume, so falling through is a
+            # no-op. Kept for future-proofing if we add stop_reason handling.
         if event_type == "content_block_start":
             block = event.get("content_block") or {}
             idx = int(event.get("index", 0))
@@ -782,7 +802,7 @@ class ResponsesStreamState:
                 collected.append((state["output_index"], self._tool_item(state, "completed")))
             collected.sort(key=lambda pair: pair[0])
             output = [item for _, item in collected]
-        return {
+        body: dict[str, Any] = {
             "id": self.response_id,
             "object": "response",
             "created_at": int(time.time()),
@@ -790,6 +810,49 @@ class ResponsesStreamState:
             "model": self.model,
             "output": output,
         }
+        if final and self._usage_seen:
+            # Codex Desktop reads usage to render the context-window meter.
+            # Emit the OpenAI shape regardless of upstream provider.
+            body["usage"] = {
+                "prompt_tokens": self._usage_input_tokens,
+                "completion_tokens": self._usage_output_tokens,
+                "total_tokens": self._usage_input_tokens + self._usage_output_tokens,
+            }
+        return body
+
+    def record_chat_usage(self, usage: dict[str, Any] | None) -> None:
+        """Capture OpenAI-shaped usage from the trailing `usage` chunk that
+        upstreams emit when stream_options.include_usage is set.
+        """
+        if not isinstance(usage, dict):
+            return
+        self._usage_input_tokens = int(usage.get("prompt_tokens") or 0)
+        self._usage_output_tokens = int(usage.get("completion_tokens") or 0)
+        self._usage_seen = True
+
+    def record_anthropic_message_start(self, message: dict[str, Any] | None) -> None:
+        """Anthropic emits input_tokens (and an early stub of output_tokens)
+        on the `message_start` event."""
+        if not isinstance(message, dict):
+            return
+        usage = message.get("usage") or {}
+        input_tokens = int(usage.get("input_tokens") or 0)
+        cache_read = int(usage.get("cache_read_input_tokens") or 0)
+        cache_creation = int(usage.get("cache_creation_input_tokens") or 0)
+        self._usage_input_tokens = input_tokens + cache_read + cache_creation
+        # Anthropic includes a partial output_tokens here too, but it grows
+        # on message_delta — overwrite when the delta arrives.
+        self._usage_output_tokens = int(usage.get("output_tokens") or 0)
+        self._usage_seen = True
+
+    def record_anthropic_message_delta(self, delta_event: dict[str, Any]) -> None:
+        """Anthropic emits the final output_tokens on `message_delta`. The
+        delta replaces (not adds to) the previous output_tokens value.
+        """
+        usage = delta_event.get("usage") or {}
+        if "output_tokens" in usage:
+            self._usage_output_tokens = int(usage.get("output_tokens") or 0)
+            self._usage_seen = True
 
 
 _THINKING_MAGIC = "anthropic-thinking-v1:"
