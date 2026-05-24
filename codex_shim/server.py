@@ -11,7 +11,14 @@ from urllib.parse import urljoin, urlparse
 from aiohttp import ClientSession, ClientTimeout, web
 
 from .bedrock_stream import BedrockStreamError, iter_anthropic_events
-from .settings import DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SETTINGS_PATH, FactoryModel, FactorySettings
+from .settings import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    DEFAULT_SETTINGS_PATH,
+    PASSTHROUGH_SLUG,
+    FactoryModel,
+    FactorySettings,
+)
 from .translate import (
     anthropic_body_to_bedrock,
     anthropic_to_chat_response,
@@ -47,6 +54,10 @@ class ShimServer:
 
     async def chat_completions(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
+        if self._is_passthrough_request(body):
+            # Chat-Completions endpoint isn't a real shape for the passthrough;
+            # surface a clear error rather than silently translating.
+            raise web.HTTPBadRequest(text="ChatGPT passthrough only supports /v1/responses")
         route = self._route(body)
         if route.is_openai_chat:
             forwarded = dict(body)
@@ -58,13 +69,12 @@ class ShimServer:
         if route.is_bedrock:
             forwarded = chat_to_anthropic(body, route.model, route.max_output_tokens)
             return await self._post_bedrock(request, route, forwarded, as_responses=False)
-        raise web.HTTPBadGateway(text=f"Unsupported Factory provider: {route.provider}")
+        raise web.HTTPBadGateway(text=f"Unsupported provider: {route.provider}")
 
     async def responses(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
         _log_incoming_request("/v1/responses", body)
-        model = str(body.get("model") or "")
-        if model == "gpt-5.5" or model.startswith("openai-gpt-5-5"):
+        if self._is_passthrough_request(body):
             return await self._chatgpt_passthrough(request, body)
         route = self._route(body)
         if route.is_openai_chat:
@@ -76,7 +86,27 @@ class ShimServer:
         if route.is_bedrock:
             forwarded = responses_to_anthropic(body, route.model, route.max_output_tokens)
             return await self._post_bedrock(request, route, forwarded, as_responses=True)
-        raise web.HTTPBadGateway(text=f"Unsupported Factory provider: {route.provider}")
+        raise web.HTTPBadGateway(text=f"Unsupported provider: {route.provider}")
+
+    def _is_passthrough_request(self, body: dict[str, Any]) -> bool:
+        """Decide if a request should hit the ChatGPT subscription passthrough.
+
+        The passthrough is only used when:
+        - the request slug matches the synthetic passthrough slug, AND
+        - the user hasn't shadowed that slug with their own BYOK entry in
+          settings.json.
+
+        Without the second check, a user who writes `"model": "gpt-5.5"` in
+        their BYOK config (e.g. routing through OpenRouter or a self-hosted
+        OpenAI-compatible gateway) would have their requests silently
+        diverted to chatgpt.com — likely failing with 401 if they aren't
+        signed in to ChatGPT, and surprising even if they are.
+        """
+        requested = str(body.get("model") or "")
+        if requested != PASSTHROUGH_SLUG:
+            return False
+        # User BYOK shadows the passthrough.
+        return self.settings.by_slug_or_model(requested) is None
 
     async def _chatgpt_passthrough(
         self, request: web.Request, body: dict[str, Any]

@@ -225,16 +225,15 @@ To roll back: `sudo rm -rf "$APP" && sudo mv "$APP.unpatched-…" "$APP"`.
 ## ChatGPT GPT‑5.5 passthrough (optional)
 
 If you have a ChatGPT plan with Codex access (`~/.codex/auth.json` exists with
-`auth_mode: chatgpt`), the shim exposes one synthetic slug
-`openai-gpt-5-5` (display name `OpenAI GPT-5.5 (ChatGPT)`) that proxies
-straight to `https://chatgpt.com/backend-api/codex/responses` with your access
-token. It bypasses Factory entirely and uses your ChatGPT subscription quota.
+`auth_mode: chatgpt`), the shim exposes one synthetic slug `gpt-5.5` (display
+name `GPT-5.5`) that proxies straight to
+`https://chatgpt.com/backend-api/codex/responses` with your access token,
+billing against your ChatGPT subscription quota.
 
-It's already in `.codex-shim/custom_model_catalog.json` after `codex-shim
-generate`. Just select it in the picker.
-
-If you don't want it, delete the entry with slug `openai-gpt-5-5` from the
-generated catalog, or run with `CODEX_SHIM_DISABLE_CHATGPT=1` (TODO).
+It's added automatically by `codex-shim generate`, so just select it in the
+picker. If you'd rather hide it, add an entry with `"model": "gpt-5.5"` to
+your `~/.codex-shim/settings.json` — your BYOK entry shadows the synthetic
+one and routing goes through whichever upstream you point it at.
 
 ---
 
@@ -243,7 +242,7 @@ generated catalog, or run with `CODEX_SHIM_DISABLE_CHATGPT=1` (TODO).
 ```
 Codex Desktop ── /v1/responses ──▶ codex-shim (127.0.0.1:8765)
                                      │
-                                     ├── slug "openai-gpt-5-5"
+                                     ├── slug "gpt-5.5" (and not shadowed by BYOK)
                                      │       └─▶ chatgpt.com/backend-api/codex/responses
                                      │           (Authorization: Bearer <auth.json access_token>)
                                      │
@@ -251,9 +250,14 @@ Codex Desktop ── /v1/responses ──▶ codex-shim (127.0.0.1:8765)
                                      │       └─▶ baseUrl/chat/completions
                                      │           (Authorization: Bearer apiKey)
                                      │
-                                     └── provider "anthropic"
-                                             └─▶ baseUrl/messages
-                                                 (x-api-key: apiKey, anthropic-version: …)
+                                     ├── provider "anthropic"
+                                     │       └─▶ baseUrl/messages
+                                     │           (x-api-key: apiKey, anthropic-version: …)
+                                     │
+                                     └── provider "bedrock" (Anthropic models only)
+                                             └─▶ bedrock-runtime.<region>.amazonaws.com
+                                                 /model/<id>/invoke[-with-response-stream]
+                                                 (Authorization: Bearer <bedrock-api-key>)
 ```
 
 The shim translates Codex's Responses-API request into the upstream's shape

@@ -14,6 +14,11 @@ DEFAULT_PORT = 8765
 # break every existing user's config, so we keep it even though the project
 # is no longer tied to factory.ai. Treat the literal as a stable interface.
 PROVIDER_NAME = "factory_byok_shim"
+# Slug of the synthetic ChatGPT-subscription catalog entry that
+# catalog.write_catalog injects. Picker selections are persisted by slug in
+# ~/.codex/config.toml, so changing this would invalidate every user's saved
+# default-model choice.
+PASSTHROUGH_SLUG = "gpt-5.5"
 
 
 def slugify(value: str) -> str:
@@ -127,7 +132,11 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def default_model_slug(models: list[FactoryModel]) -> str:
-    if not models:
-        return "gpt-5.5"
-    # Prefer the native ChatGPT passthrough slug first
-    return "gpt-5.5"
+    """Return the slug Codex Desktop should default to.
+
+    `catalog.write_catalog` always injects the synthetic passthrough entry,
+    so the passthrough slug is always selectable. This function is left in
+    place as the single source of truth for the default in case we later
+    let users opt out of the passthrough entry.
+    """
+    return PASSTHROUGH_SLUG

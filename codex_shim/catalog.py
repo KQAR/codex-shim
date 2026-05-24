@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .settings import FactoryModel, PROVIDER_NAME, default_model_slug
+from .settings import PASSTHROUGH_SLUG, FactoryModel, PROVIDER_NAME, default_model_slug
 
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
@@ -77,7 +77,7 @@ def catalog_entry(model: FactoryModel) -> dict:
 def chatgpt_passthrough_entry() -> dict:
     """Catalog entry for the original GPT-5.5 routed through ChatGPT passthrough."""
     return {
-        "slug": "gpt-5.5",
+        "slug": PASSTHROUGH_SLUG,
         "display_name": "GPT-5.5",
         "description": "OpenAI GPT-5.5 — the default Codex model, routed through ChatGPT passthrough.",
         "context_window": 400000,

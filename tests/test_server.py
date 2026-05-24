@@ -69,6 +69,61 @@ async def test_responses_routes_to_openai_chat(tmp_path):
     await upstream_client.close()
 
 
+async def test_byok_entry_shadows_passthrough_slug(tmp_path):
+    """A user BYOK entry whose slug collides with the synthetic passthrough
+    must win — otherwise the user's request silently goes to chatgpt.com,
+    which can fail unexpectedly (e.g. the user isn't logged into ChatGPT).
+    """
+    captured = {}
+
+    async def chat(request):
+        captured["body"] = await request.json()
+        return web.json_response(
+            {
+                "id": "chatcmpl_fake",
+                "choices": [{"message": {"role": "assistant", "content": "byok wins"}}],
+                "usage": {"total_tokens": 3},
+            }
+        )
+
+    upstream = web.Application()
+    upstream.router.add_post("/v1/chat/completions", chat)
+    upstream_client = TestClient(TestServer(upstream))
+    await upstream_client.start_server()
+
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "customModels": [
+                    {
+                        # Deliberately collides with the passthrough slug.
+                        "model": "gpt-5.5",
+                        "displayName": "Local gpt-5.5 via OpenRouter",
+                        "provider": "openai",
+                        "baseUrl": str(upstream_client.make_url("/v1")),
+                        "apiKey": "byok-secret",
+                    }
+                ]
+            }
+        )
+    )
+    shim_client = TestClient(TestServer(ShimServer(settings).app()))
+    await shim_client.start_server()
+
+    resp = await shim_client.post("/v1/responses", json={"model": "gpt-5.5", "input": "hi"})
+    assert resp.status == 200
+    payload = await resp.json()
+    # If the passthrough had won, this request would have hit chatgpt.com
+    # (network call we'd never reach in a test) and the assertion below
+    # could not see the upstream's "byok wins" payload.
+    assert payload["output"][0]["content"][0]["text"] == "byok wins"
+    assert captured["body"]["model"] == "gpt-5.5"
+
+    await shim_client.close()
+    await upstream_client.close()
+
+
 async def test_chat_routes_to_anthropic(tmp_path):
     captured = {}
 
